@@ -12,6 +12,7 @@ from langchain_core.messages import ToolMessage
 from backend.middleware.ToolPolicyMiddleware import (
     normalize_path,
     sanitize_query,
+    _repair_list_args,
     ToolPolicyMiddleware,
 )
 
@@ -222,3 +223,65 @@ class TestToolPolicyMiddleware:
         finally:
             # 清理
             os.remove("path_permissions.json")
+
+
+# ──────────────────────────────────────────────
+#  _repair_list_args 测试
+# ──────────────────────────────────────────────
+
+class TestRepairListArgs:
+    """list[str] 参数双重编码修复测试。"""
+
+    def test_double_encoded_json_array(self):
+        """JSON 字符串 → 自动解析为列表。"""
+        args = {"sources": '["C:\\\\a.pdf", "C:\\\\b.pdf"]'}
+        _repair_list_args("delete_files", args)
+        assert args["sources"] == ["C:\\a.pdf", "C:\\b.pdf"]
+
+    def test_normal_list_unchanged(self):
+        """已经是列表的不修改。"""
+        args = {"sources": ["C:\\a.pdf"]}
+        _repair_list_args("delete_files", args)
+        assert args["sources"] == ["C:\\a.pdf"]
+
+    def test_none_unchanged(self):
+        """None 值不修改。"""
+        args = {"sources": None}
+        _repair_list_args("delete_files", args)
+        assert args["sources"] is None
+
+    def test_invalid_json_unchanged(self):
+        """非法 JSON 字符串不修改。"""
+        args = {"sources": "not json"}
+        _repair_list_args("delete_files", args)
+        assert args["sources"] == "not json"
+
+    def test_json_object_unchanged(self):
+        """JSON 对象（非数组）不修改。"""
+        args = {"sources": '{"key": "value"}'}
+        _repair_list_args("delete_files", args)
+        assert args["sources"] == '{"key": "value"}'
+
+    def test_json_array_of_numbers_unchanged(self):
+        """JSON 数组但元素不是字符串时不修改。"""
+        args = {"sources": "[1, 2, 3]"}
+        _repair_list_args("delete_files", args)
+        assert args["sources"] == "[1, 2, 3]"
+
+    def test_move_files_sources(self):
+        """move_files 的 sources 也能修复。"""
+        args = {"sources": '["C:\\\\file.txt"]'}
+        _repair_list_args("move_files", args)
+        assert args["sources"] == ["C:\\file.txt"]
+
+    def test_extension_param(self):
+        """search_files 的 extension 参数也能修复。"""
+        args = {"extension": '[".jpg", ".png"]'}
+        _repair_list_args("search_files", args)
+        assert args["extension"] == [".jpg", ".png"]
+
+    def test_unknown_tool_ignored(self):
+        """未注册的工具不处理。"""
+        args = {"sources": '["a"]'}
+        _repair_list_args("unknown_tool", args)
+        assert args["sources"] == '["a"]'

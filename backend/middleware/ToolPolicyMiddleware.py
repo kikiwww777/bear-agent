@@ -23,6 +23,7 @@
 执行顺序：
     ObservabilityMiddleware → ToolErrorMiddleware → ToolPolicyMiddleware → 工具执行
 """
+import json
 import logging
 import re
 from typing import Callable
@@ -62,6 +63,17 @@ TOOL_PATH_LIST_ARGS: dict[str, list[str]] = {
 # 查询参数（需要做输入净化）
 TOOL_QUERY_ARGS: dict[str, list[str]] = {
     "search_files": ["query"],
+}
+
+# list[str] 参数（需要修复双重编码）
+# MiMo 模型偶尔会把 JSON 数组当字符串传：'["a","b"]' → 应为 ["a","b"]
+TOOL_LIST_ARGS: dict[str, list[str]] = {
+    "copy_files": ["sources"],
+    "move_files": ["sources"],
+    "delete_files": ["sources"],
+    "file_metadata": ["paths"],
+    "search_files": ["extension"],
+    "find_duplicates": ["extension"],
 }
 
 
@@ -197,6 +209,38 @@ def _sanitize_query_args(tool_name: str, args: dict) -> None:
             args[arg_name] = sanitize_query(value)
 
 
+def _repair_list_args(tool_name: str, args: dict) -> None:
+    """修复 list[str] 参数的双重编码。
+
+    MiMo 模型偶尔会把 JSON 数组当字符串传：
+    - 错误：sources = '["C:\\a.pdf", "C:\\b.pdf"]'（字符串）
+    - 正确：sources = ["C:\\a.pdf", "C:\\b.pdf"]（列表）
+
+    检测到这种情况时自动解析还原。
+    """
+    for arg_name in TOOL_LIST_ARGS.get(tool_name, []):
+        value = args.get(arg_name)
+        # 只处理字符串类型的值（预期是 list）
+        if not isinstance(value, str):
+            continue
+        # 尝试解析为 JSON
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        # 只接受字符串列表
+        if not isinstance(parsed, list):
+            continue
+        if not all(isinstance(item, str) for item in parsed):
+            continue
+        # 修复
+        args[arg_name] = parsed
+        logger.info(
+            "参数修复 | %s.%s | 双重编码已自动修正，%d 个元素",
+            tool_name, arg_name, len(parsed),
+        )
+
+
 def _check_path_permissions(tool_name: str, args: dict) -> str | None:
     """检查路径权限，返回拦截原因（放行返回 None）。
 
@@ -271,6 +315,7 @@ class ToolPolicyMiddleware(AgentMiddleware):
         """包裹工具调用，做输入验证和安全策略检查。
 
         流程：
+        0. 参数修复（list[str] 双重编码）
         1. 提取工具名和参数（复制一份，不改原始 request）
         2. 路径归一化（单个路径 + 路径列表）
         3. 查询净化
@@ -290,6 +335,9 @@ class ToolPolicyMiddleware(AgentMiddleware):
 
         # 复制参数，不改原始 request
         clean_args = dict(request.tool_call.get("args", {}))
+
+        # ── 0. 参数修复（list[str] 双重编码）──
+        _repair_list_args(tool_name, clean_args)
 
         # ── 1. 路径归一化（单个路径）──
         error = _sanitize_path_args(tool_name, clean_args)
