@@ -110,7 +110,8 @@ def search_files(
                 if not Path(r.full_path).is_dir():
                     filtered.append(r)
             except (PermissionError, OSError):
-                filtered.append(r)
+                # 无法判断（权限不足等），排除掉，避免误删根目录等危险路径
+                pass
         results = filtered
 
     # 生成 result_id 并缓存
