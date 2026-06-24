@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Pytest
+.pytest_cache/
+
+# Claude Code
+.claude/
+
+# LangSmith
+.langsmith/
+
+# Path permissions (runtime config)
+path_permissions.json
+1.py

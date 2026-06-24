@@ -1,0 +1,19 @@
+# Agent 框架
+langchain>=0.3
+langchain-anthropic>=0.3
+langchain-core>=0.3
+langgraph>=0.3
+deepagents>=0.6
+
+# 环境与 CLI
+python-dotenv>=1.0
+rich>=13.0
+
+# 文件元数据解析（file_metadata 工具依赖）
+Pillow>=10.0
+PyPDF2>=3.0
+python-docx>=1.0
+mutagen>=1.47
+
+# 文件删除（delete_files 工具依赖）
+send2trash>=1.8
