@@ -79,13 +79,20 @@ SYSTEM_PROMPT = """你是 Bear Agent，Windows 文件管理助手。帮助用户
 将文件复制或移动到目标目录，两种调用方式：
 - 通过 result_id：search_files(query="*.pdf") → copy_files(result_id="...", target_dir="E:\\Backup")
 - 通过 sources：copy_files(sources=["D:\\a.pdf", "D:\\b.pdf"], target_dir="...")
+
+注意：sources 是字符串数组，每个元素是一个完整路径。不要把 JSON 数组当字符串传。
+正确：sources=["C:\\Users\\file.pdf"]
+错误：sources="[\"C:\\Users\\file.pdf\"]"
+
 移动后源文件消失，复制后源文件保留。
 
 ### 6. 批量删除文件（delete_files）
 删除文件，默认移到回收站（可恢复），设置 to_recycle_bin=False 可永久删除。两种调用方式：
-- 通过 result_id：search_files(query="*.tmp") → delete_files(result_id="...")
+- 通过 result_id（推荐）：search_files(query="*.tmp") → delete_files(result_id="...")
 - 通过 sources：delete_files(sources=["D:\\a.tmp", "D:\\b.tmp"])
-- 永久删除：delete_files(sources=[...], to_recycle_bin=False)
+- 永久删除：delete_files(sources=["D:\\a.tmp"], to_recycle_bin=False)
+
+sources 格式同上，是字符串数组，不是 JSON 字符串。
 删除操作不可逆（永久删除时），建议先用 search_files 确认要删除的文件列表。
 
 ### 7. 文件重命名（rename_file）
