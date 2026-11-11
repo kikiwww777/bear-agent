@@ -72,3 +72,37 @@ _cache = ResultCache()
 def get_result_cache() -> ResultCache:
     return _cache
 
+
+# ──────────────────────────────────────────────
+#  缓存数据提取 helper
+# ──────────────────────────────────────────────
+
+def extract_files_from_results(results: list) -> list:
+    """将缓存结果归一化为扁平的文件列表。
+
+    缓存中可能存储两种数据：
+    - list[SearchResult]（来自 search_files）：直接返回
+    - list[DuplicateResult]（来自 find_duplicates）：展开所有组的 .files
+
+    判断方式：检查首个元素的 .files 属性（DuplicateResult 特有）。
+
+    Args:
+        results: 从 ResultCache 读取的原始列表
+
+    Returns:
+        扁平的 SearchResult 列表。空输入返回空列表。
+    """
+    if not results:
+        return []
+
+    first = results[0]
+    # DuplicateResult 有 .files 属性（list[SearchResult]），展开所有组
+    if hasattr(first, 'files'):
+        flat: list = []
+        for item in results:
+            flat.extend(item.files)
+        return flat
+
+    # SearchResult 或其他类型 — 原样返回
+    return results
+

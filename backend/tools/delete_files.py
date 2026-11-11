@@ -9,7 +9,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from backend.models import FileOperationResult, FileOperationItem
-from backend.utils.result_cache import get_result_cache
+from backend.utils.result_cache import get_result_cache, extract_files_from_results
 from backend.utils.format import format_size
 
 logger = logging.getLogger(__name__)
@@ -44,14 +44,15 @@ def delete_files(
     """
     # 1. 获取文件列表
     if result_id:
-        results = _cache.get(result_id)
-        if results is None:
+        raw = _cache.get(result_id)
+        if raw is None:
             logger.warning("结果句柄不存在或已过期: %s", result_id)
             return FileOperationResult(
                 total_files=0, total_size=0,
                 success_count=0, fail_count=0,
                 failed_files=[],
             )
+        results = extract_files_from_results(raw)
     elif sources:
         from backend.models import SearchResult
         results = []

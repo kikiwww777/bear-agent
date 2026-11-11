@@ -33,7 +33,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
-from backend.utils.result_cache import get_result_cache
+from backend.utils.result_cache import get_result_cache, extract_files_from_results
 from backend.utils.format import format_size
 
 logger = logging.getLogger("bear_agent.human_confirm")
@@ -105,9 +105,10 @@ def _get_file_info(args: dict) -> tuple[int, int]:
     sources = args.get("sources")
 
     if result_id:
-        results = _cache.get(result_id)
-        if results:
-            return len(results), sum(r.size for r in results)
+        raw = _cache.get(result_id)
+        if raw:
+            flat = extract_files_from_results(raw)
+            return len(flat), sum(r.size for r in flat)
 
     if sources:
         count = 0
@@ -221,44 +222,110 @@ def assess_risk(tool_name: str, args: dict) -> tuple[int, dict]:
 #  确认 UI
 # ──────────────────────────────────────────────
 
-def _build_summary(tool_name: str, risk_level: int, factors: dict) -> str:
-    """构建操作摘要，展示给用户确认。"""
-    lines = [f"⚠️  需要确认："]
-    lines.append(f"  操作：{tool_name}")
-    lines.append(f"  风险等级：{RISK_NAMES.get(risk_level, 'UNKNOWN')}")
+# 工具名到用户友好描述的映射
+_TOOL_DESCRIPTIONS = {
+    "delete_files": "删除",
+    "move_files": "移动",
+    "copy_files": "复制",
+    "rename_file": "重命名",
+}
 
-    if factors.get("file_count", 0) > 0:
-        lines.append(f"  文件数：{factors['file_count']} 个")
+# 最多显示的文件名数量
+_MAX_DISPLAY_FILES = 20
 
-    if factors.get("total_size", 0) > 0:
-        lines.append(f"  总大小：{format_size(factors['total_size'])}")
 
-    if factors.get("is_permanent"):
-        lines.append(f"  模式：永久删除（不可恢复）")
+def _get_file_samples(args: dict) -> list[str]:
+    """获取要操作的文件名样本（最多 _MAX_DISPLAY_FILES 个）。
 
+    支持两种来源：
+    - result_id：从缓存获取
+    - sources：直接使用
+    """
+    result_id = args.get("result_id")
+    sources = args.get("sources")
+
+    if result_id:
+        raw = _cache.get(result_id)
+        if raw:
+            flat = extract_files_from_results(raw)
+            return [r.name for r in flat[:_MAX_DISPLAY_FILES]]
+
+    if sources:
+        return [Path(s).name for s in sources[:_MAX_DISPLAY_FILES]]
+
+    return []
+
+
+def _get_source_dir(args: dict) -> str | None:
+    """获取文件来源目录。"""
+    sources = args.get("sources")
+    if sources and len(sources) > 0:
+        return str(Path(sources[0]).parent)
+
+    result_id = args.get("result_id")
+    if result_id:
+        raw = _cache.get(result_id)
+        if raw:
+            flat = extract_files_from_results(raw)
+            if flat:
+                return str(Path(flat[0].full_path).parent)
+
+    return None
+
+
+def _build_summary(tool_name: str, risk_level: int, factors: dict, args: dict) -> str:
+    """构建操作摘要，展示给用户确认。
+
+    设计原则：
+    - 不显示工具名（用户不需要知道 delete_files）
+    - 用自然语言描述操作
+    - 突出关键信息：文件数、大小、是否可逆
+    - 显示文件名样本，让用户知道要操作什么
+    - 显示来源/目标目录，让用户知道操作上下文
+    """
+    action = _TOOL_DESCRIPTIONS.get(tool_name, tool_name)
+    lines = []
+
+    # 获取文件名样本和目录信息
+    file_samples = _get_file_samples(args)
+    source_dir = _get_source_dir(args)
+    target_dir = args.get("target_dir")
+
+    # 主操作描述
+    file_count = factors.get("file_count", 0)
+    total_size = factors.get("total_size", 0)
+    size_str = format_size(total_size) if total_size > 0 else ""
+
+    # 第一行：操作概述
+    if file_count > 0:
+        if factors.get("is_permanent"):
+            lines.append(f"⚠️  即将永久删除 {file_count} 个文件（{size_str}，不可恢复）")
+        else:
+            lines.append(f"⚠️  即将{action} {file_count} 个文件（{size_str}）")
+    else:
+        lines.append(f"⚠️  即将{action}文件")
+
+    # 第二行：来源/目标目录
+    if tool_name in ("move_files", "copy_files") and target_dir:
+        lines.append(f"   从：{source_dir or '未知'}")
+        lines.append(f"   到：{target_dir}")
+    elif source_dir:
+        lines.append(f"   位置：{source_dir}")
+
+    # 第三行：文件名样本
+    if file_samples:
+        lines.append(f"   文件：{', '.join(file_samples)}")
+        if file_count > _MAX_DISPLAY_FILES:
+            lines.append(f"   ...等共 {file_count} 个文件")
+
+    # 额外警告
     if factors.get("target_exists"):
-        lines.append(f"  警告：目标目录已存在，可能覆盖同名文件")
+        lines.append(f"   ⚠️ 目标目录已存在，可能覆盖同名文件")
 
     if factors.get("is_system_dir"):
-        lines.append(f"  警告：操作涉及系统目录")
+        lines.append(f"   ⚠️ 操作涉及系统目录，请谨慎确认")
 
-    # 显示触发了哪些因子
-    boosts = []
-    if factors.get("count_boost"):
-        boosts.append("文件数量多")
-    if factors.get("size_boost"):
-        boosts.append("数据量大")
-    if factors.get("permanent_boost"):
-        boosts.append("永久操作")
-    if factors.get("overwrite_boost"):
-        boosts.append("可能覆盖")
-    if factors.get("system_dir_boost"):
-        boosts.append("系统目录")
-    if factors.get("small_op_discount"):
-        boosts.append("单文件小操作(降级)")
-
-    if boosts:
-        lines.append(f"  因子：{'、'.join(boosts)}")
+    lines.append(f"\n确认执行吗？(y/n)")
 
     return "\n".join(lines)
 
@@ -266,7 +333,7 @@ def _build_summary(tool_name: str, risk_level: int, factors: dict) -> str:
 def _ask_user_confirmation(summary: str) -> bool:
     """展示摘要并等待用户确认。"""
     print(f"\n{summary}")
-    print("  确认执行？(y/n): ", end="", flush=True)
+    print("  > ", end="", flush=True)
     try:
         answer = input().strip().lower()
         return answer in ("y", "yes", "是")
@@ -335,7 +402,7 @@ class HumanConfirmMiddleware(AgentMiddleware):
             tool_name, RISK_NAMES.get(risk),
         )
 
-        summary = _build_summary(tool_name, risk, factors)
+        summary = _build_summary(tool_name, risk, factors, tool_args)
 
         if _ask_user_confirmation(summary):
             logger.info("用户确认 | %s | 执行", tool_name)

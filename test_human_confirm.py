@@ -144,10 +144,12 @@ class TestBuildSummary:
             "total_size": 1024 * 1024,
             "is_permanent": False,
         }
-        summary = _build_summary("delete_files", RISK_HIGH, factors)
-        assert "delete_files" in summary
+        args = {"sources": ["C:\\Users\\file1.txt", "C:\\Users\\file2.txt"]}
+        summary = _build_summary("delete_files", RISK_HIGH, factors, args)
+        assert "删除" in summary
         assert "10" in summary
-        assert "HIGH" in summary
+        assert "1.0 MB" in summary
+        assert "file1.txt" in summary
 
     def test_permanent_delete_summary(self):
         """永久删除摘要包含不可恢复警告。"""
@@ -158,5 +160,7 @@ class TestBuildSummary:
             "is_permanent": True,
             "permanent_boost": True,
         }
-        summary = _build_summary("delete_files", RISK_HIGH, factors)
+        args = {"sources": ["C:\\Users\\file1.txt"]}
+        summary = _build_summary("delete_files", RISK_HIGH, factors, args)
         assert "不可恢复" in summary
+        assert "永久删除" in summary

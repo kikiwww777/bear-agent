@@ -10,7 +10,7 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 from backend.models import FileOperationResult, FileOperationItem
-from backend.utils.result_cache import get_result_cache
+from backend.utils.result_cache import get_result_cache, extract_files_from_results
 from backend.utils.format import format_size
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ def copy_files(
     target_dir: str,
     result_id: str | None = None,
     sources: list[str] | None = None,
+    on_conflict: str = "skip",
 ) -> FileOperationResult:
     """批量复制文件到目标目录。
 
@@ -37,21 +38,24 @@ def copy_files(
         target_dir: 目标目录路径
         result_id: 搜索结果句柄（从 search_files 获取）
         sources: 文件路径列表（直接指定要复制的文件）
+        on_conflict: 目标存在时的处理策略。'skip'（默认，跳过已有文件）、
+                     'overwrite'（覆盖已有文件）、'error'（报错）
 
     Returns:
         FileOperationResult，包含操作统计和失败详情
     """
     # 1. 获取文件列表
     if result_id:
-        # 方式 1：从缓存获取搜索结果
-        results = _cache.get(result_id)
-        if results is None:
+        # 方式 1：从缓存获取搜索结果（兼容 search_files 和 find_duplicates）
+        raw = _cache.get(result_id)
+        if raw is None:
             logger.warning("结果句柄不存在或已过期: %s", result_id)
             return FileOperationResult(
                 total_files=0, total_size=0,
                 success_count=0, fail_count=0,
                 failed_files=[],
             )
+        results = extract_files_from_results(raw)
     elif sources:
         # 方式 2：从路径列表构造 SearchResult
         from backend.models import SearchResult
@@ -91,12 +95,32 @@ def copy_files(
     # 3. 复制文件
     success_count = 0
     fail_count = 0
+    skipped_count = 0
     failed_files = []
     total_size = 0
 
     for result in results:
         source = Path(result.full_path)
         dest = target / result.name
+
+        # 冲突处理
+        if dest.exists():
+            if on_conflict == "skip":
+                skipped_count += 1
+                logger.debug("跳过已存在文件: %s", dest)
+                continue
+            elif on_conflict == "error":
+                fail_count += 1
+                failed_files.append(FileOperationItem(
+                    source=result.full_path,
+                    target=str(dest),
+                    size=result.size,
+                    status="error",
+                    error="目标文件已存在",
+                ))
+                logger.warning("文件已存在（报错）: %s", dest)
+                continue
+            # on_conflict == "overwrite": 静默覆盖（shutil.copy2 默认行为）
 
         try:
             shutil.copy2(source, dest)
@@ -116,13 +140,14 @@ def copy_files(
 
     # 4. 返回结果
     logger.info(
-        "复制完成: %d 个文件, 成功 %d, 失败 %d, 总大小 %s",
-        len(results), success_count, fail_count, format_size(total_size),
+        "复制完成: %d 个文件, 成功 %d, 跳过 %d, 失败 %d, 总大小 %s",
+        len(results), success_count, skipped_count, fail_count, format_size(total_size),
     )
     return FileOperationResult(
         total_files=len(results),
         total_size=total_size,
         success_count=success_count,
         fail_count=fail_count,
+        skipped_count=skipped_count,
         failed_files=failed_files,
     )

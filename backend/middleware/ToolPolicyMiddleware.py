@@ -58,6 +58,8 @@ TOOL_PATH_ARGS: dict[str, list[str]] = {
 TOOL_PATH_LIST_ARGS: dict[str, list[str]] = {
     "file_metadata": ["paths"],
     "delete_files": ["sources"],
+    "copy_files": ["sources"],
+    "move_files": ["sources"],
 }
 
 # 查询参数（需要做输入净化）
@@ -274,6 +276,24 @@ def _check_path_permissions(tool_name: str, args: dict) -> str | None:
             reason = f"路径 '{value}' 是只读的，'{tool_name}' 不是 SAFE 级别操作"
             logger.warning("路径权限拦截 | %s | %s", tool_name, reason)
             return reason
+
+    # 检查路径列表参数（如 sources）
+    for arg_name in TOOL_PATH_LIST_ARGS.get(tool_name, []):
+        path_list = args.get(arg_name)
+        if not path_list:
+            continue
+        for path_value in path_list:
+            permission = get_permission(path_value)
+
+            if permission == "BLOCKED":
+                reason = f"路径 '{path_value}' 被设置为完全禁止访问"
+                logger.warning("路径权限拦截 | %s | %s", tool_name, reason)
+                return reason
+
+            if permission == "READ_ONLY" and risk != "SAFE":
+                reason = f"路径 '{path_value}' 是只读的，'{tool_name}' 不是 SAFE 级别操作"
+                logger.warning("路径权限拦截 | %s | %s", tool_name, reason)
+                return reason
 
     return None
 

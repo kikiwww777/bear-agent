@@ -10,7 +10,20 @@ logging.basicConfig(
 )
 
 load_dotenv(override=True)
-from deepagents import create_deep_agent
+from deepagents import create_deep_agent, HarnessProfile, register_harness_profile
+
+# 排除 DeepAgents 内置的虚拟文件系统工具（它们在 Windows 实机上报错）
+# ls/read_file/write_file/edit_file/glob/grep: 虚拟文件系统，不支持 Windows 绝对路径
+# execute: 需要 sandbox backend，无沙箱时报错
+# task: 子 agent，当前暂不需要
+register_harness_profile(
+    "anthropic",
+    HarnessProfile(excluded_tools=frozenset({
+        "ls", "read_file", "write_file", "edit_file", "glob", "grep",
+        "execute", "task",
+    })),
+)
+
 from langchain_anthropic import ChatAnthropic
 from backend.tools.search_files import search_files
 from backend.tools.find_duplicates import find_duplicates
@@ -25,6 +38,7 @@ from backend.middleware.ObservabilityMiddleware import ObservabilityMiddleware
 from backend.middleware.ToolErrorMiddleware import ToolErrorMiddleware
 from backend.middleware.ToolPolicyMiddleware import ToolPolicyMiddleware
 from backend.middleware.HumanConfirmMiddleware import HumanConfirmMiddleware
+from backend.middleware.ToolFilterMiddleware import ToolFilterMiddleware
 from langgraph.checkpoint.memory import MemorySaver
 
 
@@ -50,7 +64,8 @@ SYSTEM_PROMPT = """你是 Bear Agent，Windows 文件管理助手。帮助用户
 - 新搜索：find_duplicates(search_path="C:\\Users") → 返回句柄 + 前 20 组
 - 按类型查：find_duplicates(search_path="D:\\", extension=".pdf")
 - 看更多：find_duplicates(result_id="xxx", page=2)
-结果按浪费空间降序排列，每组包含完整文件路径，可直接用于 copy_files/delete_files。
+结果按浪费空间降序排列，每组包含完整文件路径，可直接用于 copy_files/delete_files/move_files。
+清理重复文件工作流：find_duplicates → 分析结果 → delete_files(result_id="...") 或 copy_files(result_id="...") 备份后再清理。
 
 ### 4. 文件元数据（file_metadata）
 读取文件的详细信息，包括 EXIF、PDF 属性、音视频信息等。两种模式：
@@ -79,6 +94,7 @@ SYSTEM_PROMPT = """你是 Bear Agent，Windows 文件管理助手。帮助用户
 将文件复制或移动到目标目录，两种调用方式：
 - 通过 result_id：search_files(query="*.pdf") → copy_files(result_id="...", target_dir="E:\\Backup")
 - 通过 sources：copy_files(sources=["D:\\a.pdf", "D:\\b.pdf"], target_dir="...")
+- 冲突处理 on_conflict：'skip'（默认，跳过已有文件）、'overwrite'（覆盖）、'error'（报错）
 
 注意：sources 是字符串数组，每个元素是一个完整路径。不要把 JSON 数组当字符串传。
 正确：sources=["C:\\Users\\file.pdf"]
@@ -115,21 +131,22 @@ sources 格式同上，是字符串数组，不是 JSON 字符串。
 - 优先使用专用工具，bash 作为后备
 - 大文件清理建议需要用户确认
 - 批量查询时用 fields 参数减少上下文浪费
+- **关键：用户已经给出路径时，直接把完整路径传给 search_path / path 参数，不要传空值试探，不要逐级探索目录。**
 """
 
 
 def create_agent():
     model = ChatAnthropic(
-        model_name="mimo-v2.5-pro",
-        base_url=os.environ["OPENAI_BASE_URL"],
-        api_key=os.environ["OPENAI_API_KEY"],
+        model_name=os.environ.get("ANTHROPIC_MODEL", "deepseek-v4-flash"),
+        base_url=os.environ["ANTHROPIC_BASE_URL"],
+        api_key=os.environ["ANTHROPIC_AUTH_TOKEN"],
         temperature=0)
     checkpointer = MemorySaver()
     return create_deep_agent(
         model=model,
         tools=[search_files, find_duplicates, file_stats, file_metadata, set_path_permission, copy_files, move_files, delete_files, rename_file],
         system_prompt=SYSTEM_PROMPT,
-        middleware=[ObservabilityMiddleware(), ToolErrorMiddleware(), ToolPolicyMiddleware(), HumanConfirmMiddleware()],
+        middleware=[ToolFilterMiddleware(), ObservabilityMiddleware(), ToolErrorMiddleware(), ToolPolicyMiddleware(), HumanConfirmMiddleware()],
         checkpointer = checkpointer
     )
 
